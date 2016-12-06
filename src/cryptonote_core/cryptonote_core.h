@@ -180,6 +180,11 @@ namespace cryptonote
       */
      virtual bool get_block_template(block& b, const account_public_address& adr, difficulty_type& diffic, uint64_t& height, const blobdata& ex_nonce);
 
+     /**
+      * @brief called when a transaction is relayed
+      */
+     virtual void on_transaction_relayed(const cryptonote::blobdata& tx);
+
 
      /**
       * @brief gets the miner instance
@@ -374,6 +379,13 @@ namespace cryptonote
       * @note see tx_memory_pool::get_transactions
       */
      bool get_pool_transactions(std::list<transaction>& txs) const;
+     
+     /**
+      * @copydoc tx_memory_pool::get_transaction
+      *
+      * @note see tx_memory_pool::get_transaction
+      */
+     bool get_pool_transaction(const crypto::hash& id, transaction& tx) const;     
 
      /**
       * @copydoc tx_memory_pool::get_pool_transactions_and_spent_keys_info
@@ -459,7 +471,7 @@ namespace cryptonote
       *
       * @note see Blockchain::get_outs
       */
-     bool get_outs(const COMMAND_RPC_GET_OUTPUTS::request& req, COMMAND_RPC_GET_OUTPUTS::response& res) const;
+     bool get_outs(const COMMAND_RPC_GET_OUTPUTS_BIN::request& req, COMMAND_RPC_GET_OUTPUTS_BIN::response& res) const;
 
      /**
       *
@@ -605,7 +617,14 @@ namespace cryptonote
       *
       * @return the number of blocks to sync in one go
       */
-     std::pair<uint64_t, uint64_t> get_coinbase_tx_sum(const uint64_t start_offset, const uint64_t count);
+     std::pair<uint64_t, uint64_t> get_coinbase_tx_sum(const uint64_t start_offset, const size_t count);
+     
+     /**
+      * @brief get whether we're on testnet or not
+      *
+      * @return are we on testnet?
+      */     
+     bool get_testnet() const { return m_testnet; };
 
    private:
 

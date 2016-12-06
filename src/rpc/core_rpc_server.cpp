@@ -142,6 +142,7 @@ namespace cryptonote
     res.white_peerlist_size = m_p2p.get_peerlist_manager().get_white_peers_count();
     res.grey_peerlist_size = m_p2p.get_peerlist_manager().get_gray_peers_count();
     res.testnet = m_testnet;
+    res.cumulative_difficulty = m_core.get_blockchain_storage().get_db().get_block_cumulative_difficulty(res.height - 1);
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }
@@ -245,7 +246,7 @@ namespace cryptonote
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_get_outs(const COMMAND_RPC_GET_OUTPUTS::request& req, COMMAND_RPC_GET_OUTPUTS::response& res)
+  bool core_rpc_server::on_get_outs_bin(const COMMAND_RPC_GET_OUTPUTS_BIN::request& req, COMMAND_RPC_GET_OUTPUTS_BIN::response& res)
   {
     CHECK_CORE_BUSY();
     res.status = "Failed";
@@ -262,6 +263,42 @@ namespace cryptonote
     if(!m_core.get_outs(req, res))
     {
       return true;
+    }
+
+    res.status = CORE_RPC_STATUS_OK;
+    return true;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
+  bool core_rpc_server::on_get_outs(const COMMAND_RPC_GET_OUTPUTS::request& req, COMMAND_RPC_GET_OUTPUTS::response& res)
+  {
+    CHECK_CORE_BUSY();
+    res.status = "Failed";
+
+    if (m_restricted)
+    {
+      if (req.outputs.size() > MAX_RESTRICTED_GLOBAL_FAKE_OUTS_COUNT)
+      {
+        res.status = "Too many outs requested";
+        return true;
+      }
+    }
+
+    cryptonote::COMMAND_RPC_GET_OUTPUTS_BIN::request req_bin;
+    req_bin.outputs = req.outputs;
+    cryptonote::COMMAND_RPC_GET_OUTPUTS_BIN::response res_bin;
+    if(!m_core.get_outs(req_bin, res_bin))
+    {
+      return true;
+    }
+
+    // convert to text
+    for (const auto &i: res_bin.outs)
+    {
+      res.outs.push_back(cryptonote::COMMAND_RPC_GET_OUTPUTS::outkey());
+      cryptonote::COMMAND_RPC_GET_OUTPUTS::outkey &outkey = res.outs.back();
+      outkey.key = epee::string_tools::pod_to_hex(i.key);
+      outkey.mask = epee::string_tools::pod_to_hex(i.mask);
+      outkey.unlocked = i.unlocked;
     }
 
     res.status = CORE_RPC_STATUS_OK;
@@ -387,6 +424,17 @@ namespace cryptonote
       res.txs_as_hex.push_back(e.as_hex);
       if (req.decode_as_json)
         res.txs_as_json.push_back(e.as_json);
+
+      // output indices too if not in pool
+      if (pool_tx_hashes.find(tx_hash) == pool_tx_hashes.end())
+      {
+        bool r = m_core.get_tx_outputs_gindexs(tx_hash, e.output_indices);
+        if (!r)
+        {
+          res.status = "Failed";
+          return false;
+        }
+      }
     }
 
     BOOST_FOREACH(const auto& miss_tx, missed_txs)
@@ -1092,7 +1140,14 @@ namespace cryptonote
       return false;
     }
 
-    res.height = m_core.get_current_blockchain_height();
+    crypto::hash top_hash;
+    if (!m_core.get_blockchain_top(res.height, top_hash))
+    {
+      res.status = "Failed";
+      return false;
+    }
+    ++res.height; // turn top block height into blockchain height
+    res.top_block_hash = string_tools::pod_to_hex(top_hash);
     res.target_height = m_core.get_target_blockchain_height();
     res.difficulty = m_core.get_blockchain_storage().get_difficulty_for_next_block();
     res.target = m_core.get_blockchain_storage().get_current_hard_fork_version() < 2 ? DIFFICULTY_TARGET_V1 : DIFFICULTY_TARGET_V2;
@@ -1105,6 +1160,7 @@ namespace cryptonote
     res.white_peerlist_size = m_p2p.get_peerlist_manager().get_white_peers_count();
     res.grey_peerlist_size = m_p2p.get_peerlist_manager().get_gray_peers_count();
     res.testnet = m_testnet;
+    res.cumulative_difficulty = m_core.get_blockchain_storage().get_db().get_block_cumulative_difficulty(res.height - 1);
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }
@@ -1236,10 +1292,10 @@ namespace cryptonote
       return false;
     }
 
-    std::map<uint64_t, uint64_t> histogram;
+    std::map<uint64_t, std::tuple<uint64_t, uint64_t, uint64_t>> histogram;
     try
     {
-      histogram = m_core.get_blockchain_storage().get_output_histogram(req.amounts, req.unlocked);
+      histogram = m_core.get_blockchain_storage().get_output_histogram(req.amounts, req.unlocked, req.recent_cutoff);
     }
     catch (const std::exception &e)
     {
@@ -1251,8 +1307,8 @@ namespace cryptonote
     res.histogram.reserve(histogram.size());
     for (const auto &i: histogram)
     {
-      if (i.second >= req.min_count && (i.second <= req.max_count || req.max_count == 0))
-        res.histogram.push_back(COMMAND_RPC_GET_OUTPUT_HISTOGRAM::entry(i.first, i.second));
+      if (std::get<0>(i.second) >= req.min_count && (std::get<0>(i.second) <= req.max_count || req.max_count == 0))
+        res.histogram.push_back(COMMAND_RPC_GET_OUTPUT_HISTOGRAM::entry(i.first, std::get<0>(i.second), std::get<1>(i.second), std::get<2>(i.second)));
     }
 
     res.status = CORE_RPC_STATUS_OK;
@@ -1271,6 +1327,13 @@ namespace cryptonote
     std::pair<uint64_t, uint64_t> amounts = m_core.get_coinbase_tx_sum(req.height, req.count);
     res.emission_amount = amounts.first;
     res.fee_amount = amounts.second;
+    return true;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
+  bool core_rpc_server::on_get_per_kb_fee_estimate(const COMMAND_RPC_GET_PER_KB_FEE_ESTIMATE::request& req, COMMAND_RPC_GET_PER_KB_FEE_ESTIMATE::response& res, epee::json_rpc::error& error_resp)
+  {
+    res.fee = m_core.get_blockchain_storage().get_dynamic_per_kb_fee_estimate(req.grace_blocks);
+    res.status = CORE_RPC_STATUS_OK;
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------

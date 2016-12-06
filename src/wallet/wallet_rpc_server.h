@@ -35,7 +35,6 @@
 #include "net/http_server_impl_base.h"
 #include "wallet_rpc_server_commands_defs.h"
 #include "wallet2.h"
-#include "common/command_line.h"
 namespace tools
 {
   /************************************************************************/
@@ -46,14 +45,10 @@ namespace tools
   public:
     typedef epee::net_utils::connection_context_base connection_context;
 
+    static const char* tr(const char* str);
+
     wallet_rpc_server(wallet2& cr);
 
-    const static command_line::arg_descriptor<std::string> arg_rpc_bind_port;
-    const static command_line::arg_descriptor<std::string> arg_rpc_bind_ip;
-    const static command_line::arg_descriptor<std::string> arg_user_agent;
-
-
-    static void init_options(boost::program_options::options_description& desc);
     bool init(const boost::program_options::variables_map& vm);
     bool run();
   private:
@@ -85,6 +80,8 @@ namespace tools
         MAP_JON_RPC_WE("verify",             on_verify,             wallet_rpc::COMMAND_RPC_VERIFY)
         MAP_JON_RPC_WE("export_key_images",  on_export_key_images,  wallet_rpc::COMMAND_RPC_EXPORT_KEY_IMAGES)
         MAP_JON_RPC_WE("import_key_images",  on_import_key_images,  wallet_rpc::COMMAND_RPC_IMPORT_KEY_IMAGES)
+        MAP_JON_RPC_WE("make_uri",           on_make_uri,           wallet_rpc::COMMAND_RPC_MAKE_URI)
+        MAP_JON_RPC_WE("parse_uri",          on_parse_uri,          wallet_rpc::COMMAND_RPC_PARSE_URI)
       END_JSON_RPC_MAP()
     END_URI_MAP2()
 
@@ -112,6 +109,8 @@ namespace tools
       bool on_verify(const wallet_rpc::COMMAND_RPC_VERIFY::request& req, wallet_rpc::COMMAND_RPC_VERIFY::response& res, epee::json_rpc::error& er);
       bool on_export_key_images(const wallet_rpc::COMMAND_RPC_EXPORT_KEY_IMAGES::request& req, wallet_rpc::COMMAND_RPC_EXPORT_KEY_IMAGES::response& res, epee::json_rpc::error& er);
       bool on_import_key_images(const wallet_rpc::COMMAND_RPC_IMPORT_KEY_IMAGES::request& req, wallet_rpc::COMMAND_RPC_IMPORT_KEY_IMAGES::response& res, epee::json_rpc::error& er);
+      bool on_make_uri(const wallet_rpc::COMMAND_RPC_MAKE_URI::request& req, wallet_rpc::COMMAND_RPC_MAKE_URI::response& res, epee::json_rpc::error& er);
+      bool on_parse_uri(const wallet_rpc::COMMAND_RPC_PARSE_URI::request& req, wallet_rpc::COMMAND_RPC_PARSE_URI::response& res, epee::json_rpc::error& er);
 
       bool handle_command_line(const boost::program_options::variables_map& vm);
 

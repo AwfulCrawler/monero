@@ -123,7 +123,7 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------
   void core::stop()
   {
-    graceful_exit();
+    m_blockchain_storage.cancel();
   }
   //-----------------------------------------------------------------------------------
   void core::init_options(boost::program_options::options_description& desc)
@@ -315,7 +315,7 @@ namespace cryptonote
     }
     else
     {
-      LOG_ERROR("Attempted to use non-existant database type");
+      LOG_ERROR("Attempted to use non-existent database type");
       return false;
     }
 
@@ -616,7 +616,7 @@ namespace cryptonote
     return true;
   }
   //-----------------------------------------------------------------------------------------------
-  std::pair<uint64_t, uint64_t> core::get_coinbase_tx_sum(const uint64_t start_offset, const uint64_t count)
+  std::pair<uint64_t, uint64_t> core::get_coinbase_tx_sum(const uint64_t start_offset, const size_t count)
   {
     std::list<block> blocks;
     std::list<transaction> txs;
@@ -709,6 +709,20 @@ namespace cryptonote
     return true;
   }
   //-----------------------------------------------------------------------------------------------
+  void core::on_transaction_relayed(const cryptonote::blobdata& tx_blob)
+  {
+    std::list<std::pair<crypto::hash, cryptonote::transaction>> txs;
+    cryptonote::transaction tx;
+    crypto::hash tx_hash, tx_prefix_hash;
+    if (!parse_and_validate_tx_from_blob(tx_blob, tx, tx_hash, tx_prefix_hash))
+    {
+      LOG_ERROR("Failed to parse relayed transaction");
+      return;
+    }
+    txs.push_back(std::make_pair(tx_hash, std::move(tx)));
+    m_mempool.set_relayed(txs);
+  }
+  //-----------------------------------------------------------------------------------------------
   bool core::get_block_template(block& b, const account_public_address& adr, difficulty_type& diffic, uint64_t& height, const blobdata& ex_nonce)
   {
     return m_blockchain_storage.create_block_template(b, adr, diffic, height, ex_nonce);
@@ -744,7 +758,7 @@ namespace cryptonote
     return m_blockchain_storage.get_random_outs_for_amounts(req, res);
   }
   //-----------------------------------------------------------------------------------------------
-  bool core::get_outs(const COMMAND_RPC_GET_OUTPUTS::request& req, COMMAND_RPC_GET_OUTPUTS::response& res) const
+  bool core::get_outs(const COMMAND_RPC_GET_OUTPUTS_BIN::request& req, COMMAND_RPC_GET_OUTPUTS_BIN::response& res) const
   {
     return m_blockchain_storage.get_outs(req, res);
   }
@@ -901,6 +915,11 @@ namespace cryptonote
     m_mempool.get_transactions(txs);
     return true;
   }
+  //-----------------------------------------------------------------------------------------------  
+  bool core::get_pool_transaction(const crypto::hash &id, transaction& tx) const
+  {
+    return m_mempool.get_transaction(id, tx);
+  }  
   //-----------------------------------------------------------------------------------------------
   bool core::get_pool_transactions_and_spent_keys_info(std::vector<tx_info>& tx_infos, std::vector<spent_key_image_info>& key_image_infos) const
   {

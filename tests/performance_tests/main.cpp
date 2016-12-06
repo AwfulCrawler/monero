@@ -41,6 +41,7 @@
 #include "generate_key_derivation.h"
 #include "generate_key_image.h"
 #include "generate_key_image_helper.h"
+#include "generate_keypair.h"
 #include "is_out_to_acc.h"
 
 int main(int argc, char** argv)
@@ -100,6 +101,7 @@ int main(int argc, char** argv)
   TEST_PERFORMANCE0(test_derive_public_key);
   TEST_PERFORMANCE0(test_derive_secret_key);
   TEST_PERFORMANCE0(test_ge_frombytes_vartime);
+  TEST_PERFORMANCE0(test_generate_keypair);
 
   TEST_PERFORMANCE0(test_cn_slow_hash);
 

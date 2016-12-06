@@ -480,6 +480,7 @@ namespace cryptonote
 
     tx.extra = extra;
     keypair txkey = keypair::generate();
+    remove_field_from_tx_extra(tx.extra, typeid(tx_extra_pub_key));
     add_tx_pub_key_to_extra(tx, txkey.pub);
     tx_key = txkey.sec;
 
@@ -509,7 +510,7 @@ namespace cryptonote
 
           std::string extra_nonce;
           set_encrypted_payment_id_to_tx_extra_nonce(extra_nonce, payment_id);
-          remove_field_from_tx_extra(tx.extra, typeid(tx_extra_fields));
+          remove_field_from_tx_extra(tx.extra, typeid(tx_extra_nonce));
           if (!add_extra_nonce_to_tx_extra(tx.extra, extra_nonce))
           {
             LOG_ERROR("Failed to add encrypted payment id to tx extra");
@@ -552,7 +553,7 @@ namespace cryptonote
       //check that derivated key is equal with real output key
       if( !(in_ephemeral.pub == src_entr.outputs[src_entr.real_output].second.dest) )
       {
-        LOG_ERROR("derived public key missmatch with output public key! "<< ENDL << "derived_key:"
+        LOG_ERROR("derived public key mismatch with output public key! "<< ENDL << "derived_key:"
           << string_tools::pod_to_hex(in_ephemeral.pub) << ENDL << "real output_public_key:"
           << string_tools::pod_to_hex(src_entr.outputs[src_entr.real_output].second) );
         return false;
@@ -873,6 +874,13 @@ namespace cryptonote
     generate_key_derivation(tx_pub_key, acc.m_view_secret_key, derivation);
     crypto::public_key pk;
     derive_public_key(derivation, output_index, acc.m_account_address.m_spend_public_key, pk);
+    return pk == out_key.key;
+  }
+  //---------------------------------------------------------------
+  bool is_out_to_acc_precomp(const crypto::public_key& spend_public_key, const txout_to_key& out_key, const crypto::key_derivation& derivation, size_t output_index)
+  {
+    crypto::public_key pk;
+    derive_public_key(derivation, output_index, spend_public_key, pk);
     return pk == out_key.key;
   }
   //---------------------------------------------------------------

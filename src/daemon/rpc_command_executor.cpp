@@ -404,6 +404,7 @@ bool t_rpc_command_executor::print_connections() {
 
   tools::msg_writer() << std::setw(30) << std::left << "Remote Host"
       << std::setw(20) << "Peer id"
+      << std::setw(20) << "Support Flags"      
       << std::setw(30) << "Recv/Sent (inactive,sec)"
       << std::setw(25) << "State"
       << std::setw(20) << "Livetime(sec)"
@@ -422,6 +423,7 @@ bool t_rpc_command_executor::print_connections() {
      //<< std::setw(30) << std::left << in_out
      << std::setw(30) << std::left << address
      << std::setw(20) << info.peer_id
+     << std::setw(20) << info.support_flags
      << std::setw(30) << std::to_string(info.recv_count) + "("  + std::to_string(info.recv_idle_time) + ")/" + std::to_string(info.send_count) + "(" + std::to_string(info.send_idle_time) + ")"
      << std::setw(25) << info.state
      << std::setw(20) << info.live_time
@@ -734,6 +736,7 @@ bool t_rpc_command_executor::print_transaction_pool_long() {
                           << "blob_size: " << tx_info.blob_size << std::endl
                           << "fee: " << cryptonote::print_money(tx_info.fee) << std::endl
                           << "receive_time: " << tx_info.receive_time << " (" << get_human_time_ago(tx_info.receive_time, now) << ")" << std::endl
+                          << "relayed: " << [&](const cryptonote::tx_info &tx_info)->std::string { if (!tx_info.relayed) return "no"; return boost::lexical_cast<std::string>(tx_info.last_relayed_time) + " (" + get_human_time_ago(tx_info.last_relayed_time, now) + ")"; } (tx_info) << std::endl
                           << "kept_by_block: " << (tx_info.kept_by_block ? 'T' : 'F') << std::endl
                           << "max_used_block_height: " << tx_info.max_used_block_height << std::endl
                           << "max_used_block_id: " << tx_info.max_used_block_id_hash << std::endl
@@ -813,6 +816,7 @@ bool t_rpc_command_executor::print_transaction_pool_short() {
                           << "blob_size: " << tx_info.blob_size << std::endl
                           << "fee: " << cryptonote::print_money(tx_info.fee) << std::endl
                           << "receive_time: " << tx_info.receive_time << " (" << get_human_time_ago(tx_info.receive_time, now) << ")" << std::endl
+                          << "relayed: " << [&](const cryptonote::tx_info &tx_info)->std::string { if (!tx_info.relayed) return "no"; return boost::lexical_cast<std::string>(tx_info.last_relayed_time) + " (" + get_human_time_ago(tx_info.last_relayed_time, now) + ")"; } (tx_info) << std::endl
                           << "kept_by_block: " << (tx_info.kept_by_block ? 'T' : 'F') << std::endl
                           << "max_used_block_height: " << tx_info.max_used_block_height << std::endl
                           << "max_used_block_id: " << tx_info.max_used_block_id_hash << std::endl
@@ -820,6 +824,62 @@ bool t_rpc_command_executor::print_transaction_pool_short() {
                           << "last_failed_id: " << tx_info.last_failed_id_hash << std::endl;
     }
   }
+
+  return true;
+}
+
+bool t_rpc_command_executor::print_transaction_pool_stats() {
+  cryptonote::COMMAND_RPC_GET_TRANSACTION_POOL::request req;
+  cryptonote::COMMAND_RPC_GET_TRANSACTION_POOL::response res;
+
+  std::string fail_message = "Problem fetching transaction pool";
+
+  if (m_is_rpc)
+  {
+    if (!m_rpc_client->rpc_request(req, res, "/get_transaction_pool", fail_message.c_str()))
+    {
+      return true;
+    }
+  }
+  else
+  {
+    if (!m_rpc_server->on_get_transaction_pool(req, res) || res.status != CORE_RPC_STATUS_OK)
+    {
+      tools::fail_msg_writer() << fail_message.c_str();
+      return true;
+    }
+  }
+
+  size_t n_transactions = res.transactions.size();
+  size_t bytes = 0, min_bytes = 0, max_bytes = 0;
+  size_t n_not_relayed = 0;
+  uint64_t fee = 0;
+  uint64_t oldest = 0;
+  size_t n_10m = 0;
+  size_t n_failing = 0;
+  const uint64_t now = time(NULL);
+  for (const auto &tx_info: res.transactions)
+  {
+    bytes += tx_info.blob_size;
+    if (min_bytes == 0 || tx_info.blob_size < min_bytes)
+      min_bytes = tx_info.blob_size;
+    if (tx_info.blob_size > max_bytes)
+      max_bytes = tx_info.blob_size;
+    if (!tx_info.relayed)
+      n_not_relayed++;
+    fee += tx_info.fee;
+    if (oldest == 0 || tx_info.receive_time < oldest)
+      oldest = tx_info.receive_time;
+    if (tx_info.receive_time < now - 600)
+      n_10m++;
+    if (tx_info.last_failed_height)
+      ++n_failing;
+  }
+  size_t avg_bytes = n_transactions ? bytes / n_transactions : 0;
+
+  tools::msg_writer() << n_transactions << " tx(es), " << bytes << " bytes total (min " << min_bytes << ", max " << max_bytes << ", avg " << avg_bytes << ")" << std::endl
+      << "fees " << cryptonote::print_money(fee) << " (avg " << cryptonote::print_money(n_transactions ? fee / n_transactions : 0) << " per tx)" << std::endl
+      << n_not_relayed << " not relayed, " << n_failing << " failing, " << n_10m << " older than 10 minutes (oldest " << (oldest == 0 ? "-" : get_human_time_ago(oldest, now)) << ")" << std::endl;
 
   return true;
 }
@@ -1243,6 +1303,8 @@ bool t_rpc_command_executor::output_histogram(uint64_t min_count, uint64_t max_c
 
     req.min_count = min_count;
     req.max_count = max_count;
+    req.unlocked = false;
+    req.recent_cutoff = 0;
 
     if (m_is_rpc)
     {
@@ -1261,10 +1323,10 @@ bool t_rpc_command_executor::output_histogram(uint64_t min_count, uint64_t max_c
     }
 
     std::sort(res.histogram.begin(), res.histogram.end(),
-        [](const cryptonote::COMMAND_RPC_GET_OUTPUT_HISTOGRAM::entry &e1, const cryptonote::COMMAND_RPC_GET_OUTPUT_HISTOGRAM::entry &e2)->bool { return e1.instances < e2.instances; });
+        [](const cryptonote::COMMAND_RPC_GET_OUTPUT_HISTOGRAM::entry &e1, const cryptonote::COMMAND_RPC_GET_OUTPUT_HISTOGRAM::entry &e2)->bool { return e1.total_instances < e2.total_instances; });
     for (const auto &e: res.histogram)
     {
-        tools::msg_writer() << e.instances << "  " << cryptonote::print_money(e.amount);
+        tools::msg_writer() << e.total_instances << "  " << cryptonote::print_money(e.amount);
     }
 
     return true;

@@ -133,11 +133,13 @@ namespace wallet_rpc
       std::string tx_hash;
       std::string tx_key;
       std::list<std::string> amount_keys;
+      uint64_t fee;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(tx_hash)
         KV_SERIALIZE(tx_key)
         KV_SERIALIZE(amount_keys)
+        KV_SERIALIZE(fee)
       END_KV_SERIALIZE_MAP()
     };
   };
@@ -178,10 +180,12 @@ namespace wallet_rpc
     {
       std::list<std::string> tx_hash_list;
       std::list<std::string> tx_key_list;
+      std::list<uint64_t> fee_list;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(tx_hash_list)
         KV_SERIALIZE(tx_key_list)
+        KV_SERIALIZE(fee_list)
       END_KV_SERIALIZE_MAP()
     };
   };
@@ -212,10 +216,12 @@ namespace wallet_rpc
     {
       std::list<std::string> tx_hash_list;
       std::list<std::string> tx_key_list;
+      std::list<uint64_t> fee_list;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(tx_hash_list)
         KV_SERIALIZE(tx_key_list)
+        KV_SERIALIZE(fee_list)
       END_KV_SERIALIZE_MAP()
     };
   };
@@ -256,10 +262,12 @@ namespace wallet_rpc
     {
       std::list<std::string> tx_hash_list;
       std::list<std::string> tx_key_list;
+      std::list<uint64_t> fee_list;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(tx_hash_list)
         KV_SERIALIZE(tx_key_list)
+        KV_SERIALIZE(fee_list)
       END_KV_SERIALIZE_MAP()
     };
   };
@@ -691,6 +699,62 @@ namespace wallet_rpc
         KV_SERIALIZE(height)
         KV_SERIALIZE(spent)
         KV_SERIALIZE(unspent)
+      END_KV_SERIALIZE_MAP()
+    };
+  };
+
+  struct uri_spec
+  {
+    std::string address;
+    std::string payment_id;
+    uint64_t amount;
+    std::string tx_description;
+    std::string recipient_name;
+
+    BEGIN_KV_SERIALIZE_MAP()
+      KV_SERIALIZE(address);
+      KV_SERIALIZE(payment_id);
+      KV_SERIALIZE(amount);
+      KV_SERIALIZE(tx_description);
+      KV_SERIALIZE(recipient_name);
+    END_KV_SERIALIZE_MAP()
+  };
+
+  struct COMMAND_RPC_MAKE_URI
+  {
+    struct request: public uri_spec
+    {
+    };
+
+    struct response
+    {
+      std::string uri;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE(uri)
+      END_KV_SERIALIZE_MAP()
+    };
+  };
+
+  struct COMMAND_RPC_PARSE_URI
+  {
+    struct request
+    {
+      std::string uri;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE(uri)
+      END_KV_SERIALIZE_MAP()
+    };
+
+    struct response
+    {
+      uri_spec uri;
+      std::vector<std::string> unknown_parameters;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE(uri);
+        KV_SERIALIZE(unknown_parameters);
       END_KV_SERIALIZE_MAP()
     };
   };

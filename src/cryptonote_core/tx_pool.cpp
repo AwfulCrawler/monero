@@ -133,12 +133,8 @@ namespace cryptonote
       fee = tx.rct_signatures.txnFee;
     }
 
-    uint64_t needed_fee = blob_size / 1024;
-    needed_fee += (blob_size % 1024) ? 1 : 0;
-    needed_fee *= FEE_PER_KB;
-    if (!kept_by_block && fee < needed_fee)
+    if (!kept_by_block && !m_blockchain.check_fee(blob_size, fee))
     {
-      LOG_PRINT_L1("transaction fee is not enough: " << print_money(fee) << ", minimum fee: " << print_money(needed_fee));
       tvc.m_verifivation_failed = true;
       tvc.m_fee_too_low = true;
       return false;
@@ -209,7 +205,7 @@ namespace cryptonote
     {
       //update transactions container
       auto txd_p = m_transactions.insert(transactions_container::value_type(id, txd));
-      CHECK_AND_ASSERT_MES(txd_p.second, false, "intrnal error: transaction already exists at inserting in memorypool");
+      CHECK_AND_ASSERT_MES(txd_p.second, false, "internal error: transaction already exists at inserting in memorypool");
       txd_p.first->second.blob_size = blob_size;
       txd_p.first->second.kept_by_block = kept_by_block;
       txd_p.first->second.fee = fee;
@@ -387,7 +383,10 @@ namespace cryptonote
     {
       auto i = m_transactions.find(it->first);
       if (i != m_transactions.end())
+      {
+        i->second.relayed = true;
         i->second.last_relayed_time = now;
+      }
     }
   }
   //---------------------------------------------------------------------------------
@@ -422,6 +421,8 @@ namespace cryptonote
       txi.last_failed_height = txd.last_failed_height;
       txi.last_failed_id_hash = epee::string_tools::pod_to_hex(txd.last_failed_id);
       txi.receive_time = txd.receive_time;
+      txi.relayed = txd.relayed;
+      txi.last_relayed_time = txd.last_relayed_time;
       tx_infos.push_back(txi);
     }
 

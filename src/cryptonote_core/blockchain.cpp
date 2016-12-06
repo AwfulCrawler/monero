@@ -46,6 +46,7 @@
 #include "misc_language.h"
 #include "profile_tools.h"
 #include "file_io_utils.h"
+#include "common/int-util.h"
 #include "common/boost_serialization_helper.h"
 #include "warnings.h"
 #include "crypto/hash.h"
@@ -71,6 +72,9 @@ extern "C" void slow_hash_allocate_state();
 extern "C" void slow_hash_free_state();
 
 DISABLE_VS_WARNINGS(4267)
+
+// used to overestimate the block reward when estimating a per kB to use
+#define BLOCK_REWARD_OVERESTIMATE (10 * 1000000000000)
 
 static const struct {
   uint8_t version;
@@ -117,7 +121,7 @@ static const uint64_t testnet_hard_fork_version_1_till = 624633;
 //------------------------------------------------------------------
 Blockchain::Blockchain(tx_memory_pool& tx_pool) :
   m_db(), m_tx_pool(tx_pool), m_hardfork(NULL), m_timestamps_and_difficulties_height(0), m_current_block_cumul_sz_limit(0), m_is_in_checkpoint_zone(false),
-  m_is_blockchain_storing(false), m_enforce_dns_checkpoints(false), m_max_prepare_blocks_threads(4), m_db_blocks_per_sync(1), m_db_sync_mode(db_async), m_fast_sync(true), m_show_time_stats(false), m_sync_counter(0)
+  m_is_blockchain_storing(false), m_enforce_dns_checkpoints(false), m_max_prepare_blocks_threads(4), m_db_blocks_per_sync(1), m_db_sync_mode(db_async), m_fast_sync(true), m_show_time_stats(false), m_sync_counter(0), m_cancel(false)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 }
@@ -1145,7 +1149,7 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
   uint8_t hf_version = m_hardfork->get_current_version();
   size_t max_outs = hf_version >= 4 ? 1 : 11;
   bool r = construct_miner_tx(height, median_size, already_generated_coins, txs_size, fee, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version);
-  CHECK_AND_ASSERT_MES(r, false, "Failed to construc miner tx, first chance");
+  CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, first chance");
   size_t cumulative_size = txs_size + get_object_blobsize(b.miner_tx);
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
   LOG_PRINT_L1("Creating block template: miner tx size " << get_object_blobsize(b.miner_tx) <<
@@ -1155,7 +1159,7 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
   {
     r = construct_miner_tx(height, median_size, already_generated_coins, cumulative_size, fee, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version);
 
-    CHECK_AND_ASSERT_MES(r, false, "Failed to construc miner tx, second chance");
+    CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, second chance");
     size_t coinbase_blob_size = get_object_blobsize(b.miner_tx);
     if (coinbase_blob_size > cumulative_size - txs_size)
     {
@@ -1757,7 +1761,7 @@ bool Blockchain::get_random_rct_outs(const COMMAND_RPC_GET_RANDOM_RCT_OUTPUTS::r
   return true;
 }
 //------------------------------------------------------------------
-bool Blockchain::get_outs(const COMMAND_RPC_GET_OUTPUTS::request& req, COMMAND_RPC_GET_OUTPUTS::response& res) const
+bool Blockchain::get_outs(const COMMAND_RPC_GET_OUTPUTS_BIN::request& req, COMMAND_RPC_GET_OUTPUTS_BIN::response& res) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
@@ -1798,7 +1802,7 @@ bool Blockchain::find_blockchain_supplement(const std::list<crypto::hash>& qbloc
   auto gen_hash = m_db->get_block_hash_from_height(0);
   if(qblock_ids.back() != gen_hash)
   {
-    LOG_PRINT_L1("Client sent wrong NOTIFY_REQUEST_CHAIN: genesis block missmatch: " << std::endl << "id: " << qblock_ids.back() << ", " << std::endl << "expected: " << gen_hash << "," << std::endl << " dropping connection");
+    LOG_PRINT_L1("Client sent wrong NOTIFY_REQUEST_CHAIN: genesis block mismatch: " << std::endl << "id: " << qblock_ids.back() << ", " << std::endl << "expected: " << gen_hash << "," << std::endl << " dropping connection");
 	m_db->block_txn_abort();
     return false;
   }
@@ -2223,6 +2227,19 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
     if (tx.version >= 2) {
       for (auto &o: tx.vout) {
         if (o.amount != 0) {
+          tvc.m_invalid_output = true;
+          return false;
+        }
+      }
+    }
+  }
+
+  // from v4, forbid invalid pubkeys
+  if (m_hardfork->get_current_version() >= 4) {
+    for (const auto &o: tx.vout) {
+      if (o.target.type() == typeid(txout_to_key)) {
+        const txout_to_key& out_to_key = boost::get<txout_to_key>(o.target);
+        if (!crypto::check_key(out_to_key.key)) {
           tvc.m_invalid_output = true;
           return false;
         }
@@ -2706,6 +2723,90 @@ void Blockchain::check_ring_signature(const crypto::hash &tx_prefix_hash, const 
   }
 
   result = crypto::check_ring_signature(tx_prefix_hash, key_image, p_output_keys, sig.data()) ? 1 : 0;
+}
+
+//------------------------------------------------------------------
+uint64_t Blockchain::get_dynamic_per_kb_fee(uint64_t block_reward, size_t median_block_size)
+{
+  if (median_block_size < CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V2)
+    median_block_size = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V2;
+
+  uint64_t unscaled_fee_per_kb = (DYNAMIC_FEE_PER_KB_BASE_FEE * CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V2 / median_block_size);
+  uint64_t hi, lo = mul128(unscaled_fee_per_kb, block_reward, &hi);
+  static_assert(DYNAMIC_FEE_PER_KB_BASE_BLOCK_REWARD % 1000000 == 0, "DYNAMIC_FEE_PER_KB_BASE_BLOCK_REWARD must be divisible by 1000000");
+  static_assert(DYNAMIC_FEE_PER_KB_BASE_BLOCK_REWARD / 1000000 <= std::numeric_limits<uint32_t>::max(), "DYNAMIC_FEE_PER_KB_BASE_BLOCK_REWARD is too large");
+  // divide in two steps, since the divisor must be 32 bits, but DYNAMIC_FEE_PER_KB_BASE_BLOCK_REWARD isn't
+  div128_32(hi, lo, DYNAMIC_FEE_PER_KB_BASE_BLOCK_REWARD / 1000000, &hi, &lo);
+  div128_32(hi, lo, 1000000, &hi, &lo);
+  assert(hi == 0);
+
+  return lo;
+}
+
+//------------------------------------------------------------------
+bool Blockchain::check_fee(size_t blob_size, uint64_t fee) const
+{
+  const uint8_t version = get_current_hard_fork_version();
+
+  uint64_t fee_per_kb;
+  if (version < HF_VERSION_DYNAMIC_FEE)
+  {
+    fee_per_kb = FEE_PER_KB;
+  }
+  else
+  {
+    uint64_t median = m_current_block_cumul_sz_limit / 2;
+    uint64_t already_generated_coins = m_db->height() ? m_db->get_block_already_generated_coins(m_db->height() - 1) : 0;
+    uint64_t base_reward;
+    if (!get_block_reward(median, 1, already_generated_coins, base_reward, version))
+      return false;
+    fee_per_kb = get_dynamic_per_kb_fee(base_reward, median);
+  }
+  LOG_PRINT_L2("Using " << print_money(fee) << "/kB fee");
+
+  uint64_t needed_fee = blob_size / 1024;
+  needed_fee += (blob_size % 1024) ? 1 : 0;
+  needed_fee *= fee_per_kb;
+
+  if (fee < needed_fee)
+  {
+    LOG_PRINT_L1("transaction fee is not enough: " << print_money(fee) << ", minimum fee: " << print_money(needed_fee));
+    return false;
+  }
+  return true;
+}
+
+//------------------------------------------------------------------
+uint64_t Blockchain::get_dynamic_per_kb_fee_estimate(uint64_t grace_blocks) const
+{
+  const uint8_t version = get_current_hard_fork_version();
+
+  if (version < HF_VERSION_DYNAMIC_FEE)
+    return FEE_PER_KB;
+
+  if (grace_blocks >= CRYPTONOTE_REWARD_BLOCKS_WINDOW)
+    grace_blocks = CRYPTONOTE_REWARD_BLOCKS_WINDOW - 1;
+
+  std::vector<size_t> sz;
+  get_last_n_blocks_sizes(sz, CRYPTONOTE_REWARD_BLOCKS_WINDOW - grace_blocks);
+  for (size_t i = 0; i < grace_blocks; ++i)
+    sz.push_back(CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V2);
+
+  uint64_t median = epee::misc_utils::median(sz);
+  if(median <= CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V2)
+    median = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V2;
+
+  uint64_t already_generated_coins = m_db->height() ? m_db->get_block_already_generated_coins(m_db->height() - 1) : 0;
+  uint64_t base_reward;
+  if (!get_block_reward(median, 1, already_generated_coins, base_reward, version))
+  {
+    LOG_PRINT_L1("Failed to determine block reward, using placeholder " << print_money(BLOCK_REWARD_OVERESTIMATE) << " as a high bound");
+    base_reward = BLOCK_REWARD_OVERESTIMATE;
+  }
+
+  uint64_t fee = get_dynamic_per_kb_fee(base_reward, median);
+  LOG_PRINT_L2("Estimating " << grace_blocks << "-block fee at " << print_money(fee) << "/kB");
+  return fee;
 }
 
 //------------------------------------------------------------------
@@ -3354,6 +3455,8 @@ void Blockchain::block_longhash_worker(const uint64_t height, const std::vector<
   //       the height of the block passed to it
   for (const auto & block : blocks)
   {
+    if (m_cancel)
+       return;
     crypto::hash id = get_block_hash(block);
     crypto::hash pow = get_block_longhash(block, height);
     map.emplace(id, pow);
@@ -3529,12 +3632,18 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::list<block_complete_e
 
       thread_list.clear();
 
+      if (m_cancel)
+         return false;
+
       for (const auto & map : maps)
       {
         m_blocks_longhash_table.insert(map.begin(), map.end());
       }
     }
   }
+
+  if (m_cancel)
+    return false;
 
   if (blocks_exist)
   {
@@ -3573,6 +3682,9 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::list<block_complete_e
   // generate sorted tables for all amounts and absolute offsets
   for (const auto &entry : blocks_entry)
   {
+    if (m_cancel)
+      return false;
+
     for (const auto &tx_blob : entry.txs)
     {
       crypto::hash tx_hash = null_hash;
@@ -3681,6 +3793,9 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::list<block_complete_e
   // now generate a table for each tx_prefix and k_image hashes
   for (const auto &entry : blocks_entry)
   {
+    if (m_cancel)
+      return false;
+
     for (const auto &tx_blob : entry.txs)
     {
       crypto::hash tx_hash = null_hash;
@@ -3757,9 +3872,14 @@ bool Blockchain::get_hard_fork_voting_info(uint8_t version, uint32_t &window, ui
   return m_hardfork->get_voting_info(version, window, votes, threshold, earliest_height, voting);
 }
 
-std::map<uint64_t, uint64_t> Blockchain:: get_output_histogram(const std::vector<uint64_t> &amounts, bool unlocked) const
+std::map<uint64_t, std::tuple<uint64_t, uint64_t, uint64_t>> Blockchain:: get_output_histogram(const std::vector<uint64_t> &amounts, bool unlocked, uint64_t recent_cutoff) const
 {
-  return m_db->get_output_histogram(amounts, unlocked);
+  return m_db->get_output_histogram(amounts, unlocked, recent_cutoff);
+}
+
+void Blockchain::cancel()
+{
+  m_cancel = true;
 }
 
 #if defined(PER_BLOCK_CHECKPOINT)

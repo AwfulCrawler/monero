@@ -63,6 +63,7 @@ namespace nodetool
   struct p2p_connection_context_t: base_type //t_payload_net_handler::connection_context //public net_utils::connection_context_base
   {
     peerid_type peer_id;
+    uint32_t support_flags;
   };
 
   template<class t_payload_net_handler>
@@ -146,6 +147,7 @@ namespace nodetool
       HANDLE_INVOKE_T2(COMMAND_REQUEST_NETWORK_STATE, &node_server::handle_get_network_state)
       HANDLE_INVOKE_T2(COMMAND_REQUEST_PEER_ID, &node_server::handle_get_peer_id)
 #endif
+      HANDLE_INVOKE_T2(COMMAND_REQUEST_SUPPORT_FLAGS, &node_server::handle_get_support_flags)
       CHAIN_INVOKE_MAP_TO_OBJ_FORCE_CONTEXT(m_payload_handler, typename t_payload_net_handler::connection_context&)
     END_INVOKE_MAP2()
 
@@ -158,6 +160,7 @@ namespace nodetool
     int handle_get_network_state(int command, COMMAND_REQUEST_NETWORK_STATE::request& arg, COMMAND_REQUEST_NETWORK_STATE::response& rsp, p2p_connection_context& context);
     int handle_get_peer_id(int command, COMMAND_REQUEST_PEER_ID::request& arg, COMMAND_REQUEST_PEER_ID::response& rsp, p2p_connection_context& context);
 #endif
+    int handle_get_support_flags(int command, COMMAND_REQUEST_SUPPORT_FLAGS::request& arg, COMMAND_REQUEST_SUPPORT_FLAGS::response& rsp, p2p_connection_context& context);
     bool init_config();
     bool make_default_config();
     bool store_config();
@@ -169,12 +172,13 @@ namespace nodetool
     virtual void on_connection_close(p2p_connection_context& context);
     virtual void callback(p2p_connection_context& context);
     //----------------- i_p2p_endpoint -------------------------------------------------------------
+    virtual bool relay_notify_to_list(int command, const std::string& data_buff, const std::list<boost::uuids::uuid> &connections);
     virtual bool relay_notify_to_all(int command, const std::string& data_buff, const epee::net_utils::connection_context_base& context);
     virtual bool invoke_command_to_peer(int command, const std::string& req_buff, std::string& resp_buff, const epee::net_utils::connection_context_base& context);
     virtual bool invoke_notify_to_peer(int command, const std::string& req_buff, const epee::net_utils::connection_context_base& context);
     virtual bool drop_connection(const epee::net_utils::connection_context_base& context);
     virtual void request_callback(const epee::net_utils::connection_context_base& context);
-    virtual void for_each_connection(std::function<bool(typename t_payload_net_handler::connection_context&, peerid_type)> f);
+    virtual void for_each_connection(std::function<bool(typename t_payload_net_handler::connection_context&, peerid_type, uint32_t)> f);
     virtual bool add_ip_fail(uint32_t address);
     //----------------- i_connection_filter  --------------------------------------------------------
     virtual bool is_remote_ip_allowed(uint32_t adress);
@@ -204,6 +208,7 @@ namespace nodetool
     bool is_addr_connected(const net_address& peer);
     template<class t_callback>
     bool try_ping(basic_node_data& node_data, p2p_connection_context& context, t_callback cb);
+    bool try_get_support_flags(const p2p_connection_context& context, std::function<void(p2p_connection_context&, const uint32_t&)> f);
     bool make_expected_connections_count(bool white_list, size_t expected_connections);
     void cache_connect_fail_info(const net_address& addr);
     bool is_addr_recently_failed(const net_address& addr);
@@ -240,10 +245,12 @@ namespace nodetool
     {
       network_config m_net_config;
       uint64_t m_peer_id;
+      uint32_t m_support_flags;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(m_net_config)
         KV_SERIALIZE(m_peer_id)
+        KV_SERIALIZE(m_support_flags)
       END_KV_SERIALIZE_MAP()
     };
 

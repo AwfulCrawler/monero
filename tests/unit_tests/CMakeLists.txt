@@ -35,10 +35,12 @@ set(unit_tests_sources
   canonical_amounts.cpp
   chacha8.cpp
   checkpoints.cpp
+  command_line.cpp
   decompose_amount_into_digits.cpp
   dns_resolver.cpp
   epee_boosted_tcp_server.cpp
   epee_levin_protocol_handler_async.cpp
+  fee.cpp
   get_xtype_from_string.cpp
   main.cpp
   mnemonics.cpp
@@ -49,8 +51,10 @@ set(unit_tests_sources
   test_format_utils.cpp
   test_peerlist.cpp
   test_protocol_pack.cpp
+  thread_group.cpp
   hardfork.cpp
   unbound.cpp
+  uri.cpp
   varint.cpp
   ringct.cpp
   output_selection.cpp)
